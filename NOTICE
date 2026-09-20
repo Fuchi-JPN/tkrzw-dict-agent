@@ -1,0 +1,77 @@
+tkrzw-dict-agent
+Copyright 2026 Fuchi-JPN
+
+This product is a derivative work based on the following components.  The
+original copyright notices and attributions are reproduced below as required
+by the Apache License, Version 2.0, Section 4.
+
+================================================================================
+tkrzw-dict — https://github.com/estraier/tkrzw-dict
+================================================================================
+
+  Copyright 2020 Google LLC
+  Author: Mikio Hirabayashi
+
+  Licensed under the Apache License, Version 2.0.
+
+  tkrzw-dict is a set of scripts and data that build and search a union
+  English-Japanese dictionary on top of the Tkrzw key-value store.
+
+  This project does not redistribute the tkrzw-dict source code.  It depends on
+  a checkout of it and applies a patch, patches/tkrzw-dict-use-pytkrzw.patch,
+  which redirects the upstream `import tkrzw` statements to this project's
+  pure-Python reader.  See README.md, "Relation to upstream".
+
+================================================================================
+Tkrzw — https://dbmx.net/tkrzw/
+================================================================================
+
+  Copyright 2020 Google LLC
+  Author: Mikio Hirabayashi
+
+  Licensed under the Apache License, Version 2.0.
+
+  Tkrzw is the key-value store whose HashDBM on-disk format the union
+  dictionary uses.  This project does not link against the Tkrzw C++ library or
+  its Python extension.  tkrzw_dict_agent/core/pytkrzw.py is an independent,
+  read-only implementation of the HashDBM record format, written from the
+  documented format and the published Tkrzw sources.
+
+================================================================================
+Union dictionary data — https://dbmx.net/dict/
+================================================================================
+
+  The dictionary data (union-body.tkh, union-tran-index.tkh,
+  union-infl-index.tkh, union-keys.txt, union-tran-keys.txt,
+  union-examples.tsv, and the union-dict-data.tar.gz archive) is NOT part of
+  this repository.  It is downloaded separately by scripts/setup.sh from
+  https://dbmx.net/dict/union-dict-data.tar.gz.
+
+  That data is compiled from open sources, each carrying its own license:
+
+    WordNet                 https://wordnet.princeton.edu/
+    Japanese WordNet        https://bond-lab.github.io/wnja/
+    Wiktionary (en, ja)     https://en.wiktionary.org/  https://ja.wiktionary.org/
+    Wikipedia (en, ja)      https://en.wikipedia.org/  https://ja.wikipedia.org/
+    EDict2                  http://www.edrdg.org/jmdict/edict.html
+    Tanaka Corpus           http://edrdg.org/wiki/index.php/Tanaka_Corpus
+    WikiCorpus              https://alaginrc.nict.go.jp/WikiCorpus/
+    Japanese-English Subtitle Corpus
+                            https://nlp.stanford.edu/projects/jesc/
+    CCAligned               https://www.statmt.org/cc-aligned/
+    Open American National Corpus
+                            https://anc.org/
+    Common Crawl            https://commoncrawl.org/
+
+  Refer to those sites for the license of each data source.  Redistribution of
+  the dictionary data is governed by their terms, not by the license of this
+  project's source code.
+
+================================================================================
+Specification documents
+================================================================================
+
+  The documents under docs/spec/ describe the upstream tkrzw-dict project and
+  the union dictionary, and were derived from material published by the
+  upstream project.  They are included here for reference and remain subject to
+  the upstream Apache License, Version 2.0.

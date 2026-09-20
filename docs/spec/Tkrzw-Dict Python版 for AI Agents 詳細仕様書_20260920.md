@@ -1,6 +1,6 @@
 # Tkrzw-Dict Python版 for AI Agents 詳細仕様書
 
-**版:** 1.3
+**版:** 1.4
 **作成日:** 2026-09-20
 **対象:** 実装済みモジュール `tkrzw_dict_agent` の詳細仕様
 **上位仕様:** `Tkrzw-Dict Python版 for AI Agents― AIエージェント向け語彙サイドカー拡張モジュール仕様書 ―`（以下「上位仕様書」）
@@ -202,8 +202,14 @@ python3 -m venv .venv
 
 ```
 <repo root>/
+  ├ README.md                             プロジェクト概要・上流との関係
+  ├ LICENSE                               Apache License 2.0
+  ├ NOTICE                                上流への帰属・データライセンス
   ├ pyproject.toml                        パッケージ定義・console script
+  ├ .gitignore                            辞書データ・venv・上流チェックアウトの除外
   ├ docs/spec/                            仕様書
+  ├ patches/                              上流への改変パッチ
+  ├ scripts/setup.sh                      環境再現スクリプト
   ├ tkrzw-dict/                           上流コード（vendored、改変は import 1行のみ）
   │   ├ tkrzw_union_searcher.py           検索エンジン
   │   ├ tkrzw_dict.py                     正規化・頻度ユーティリティ
@@ -1194,6 +1200,7 @@ enrich のコストは概ね**約1 ms/語**であり、典型的な1文（6–10
 | 1.1 | 2026-09-20 | 他ホストから呼び出せる常駐サーバ（`dict-server`、既定 `0.0.0.0:8765`）を 14.5 に追加。データ接頭辞の解決順を明文化し、環境変数・console script 一覧を付録Aに追加。 |
 | 1.2 | 2026-09-20 | 他ホストのエージェント向けスキル定義（`skills/tkrzw-dict-vocabulary-support/SKILL.md`）を 14.6 に追加。 |
 | 1.3 | 2026-09-20 | Windows の文字化け対策。CLI のリダイレクト時 UTF-8 固定（15.5）と HTTP 応答の `charset=utf-8` 明示（14.4）を追加。スキル定義に「Windows and console encoding」を追加。 |
+| 1.4 | 2026-09-20 | リポジトリ公開に伴い `LICENSE`（Apache-2.0）・`NOTICE`（上流帰属）・`README.md`（上流との関係）を追加。`pyproject.toml` にライセンス・URL メタデータを追加。 |
 
 ### 22.1 上位仕様書からの主な実装上の決定
 
