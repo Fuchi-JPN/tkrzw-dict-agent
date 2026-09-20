@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Local tooling
+.idea/
+.vscode/
+*.swp
+
+# ---------------------------------------------------------------
+# Vendored upstream checkout and dictionary data.
+#
+# tkrzw-dict/ is a clone of https://github.com/estraier/tkrzw-dict.git
+# plus the union dictionary data, which is a separate ~900 MB download
+# from https://dbmx.net/dict/union-dict-data.tar.gz.  Neither belongs in
+# this repository; run scripts/setup.sh to reproduce both.
+# ---------------------------------------------------------------
+tkrzw-dict/
+
+# Dictionary data, in case it is ever placed at the repository root.
+union-body.tkh
+union-tran-index.tkh
+union-infl-index.tkh
+union-keys.txt
+union-tran-keys.txt
+union-examples.tsv
+union-dict-data.tar.gz
+*.tkh
+*.tks

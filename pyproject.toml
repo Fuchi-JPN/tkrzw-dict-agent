@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tkrzw-dict-agent"
+version = "0.1.0"
+description = "Vocabulary sidecar module for AI agents, built on Tkrzw-Dict"
+requires-python = ">=3.9"
+dependencies = [
+  "regex",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+api = ["fastapi", "uvicorn", "httpx"]
+
+[project.scripts]
+dict = "tkrzw_dict_agent.cli.main:main"
+dict-server = "tkrzw_dict_agent.agent_api.server:main"
+
+[tool.setuptools.packages.find]
+include = ["tkrzw_dict_agent*"]
+
+[tool.setuptools.package-data]
+tkrzw_dict_agent = ["agent_api/*.json"]

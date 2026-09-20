@@ -1,0 +1,27 @@
+diff --git a/tkrzw_dict.py b/tkrzw_dict.py
+index 80dfb18..5eda718 100644
+--- a/tkrzw_dict.py
++++ b/tkrzw_dict.py
+@@ -22,7 +22,7 @@ import random
+ import re
+ import regex
+ import sys
+-import tkrzw
++import tkrzw_dict_agent.core.pytkrzw as tkrzw
+ import unicodedata
+ 
+ 
+diff --git a/tkrzw_union_searcher.py b/tkrzw_union_searcher.py
+index c74262b..318141e 100644
+--- a/tkrzw_union_searcher.py
++++ b/tkrzw_union_searcher.py
+@@ -20,8 +20,8 @@ import json
+ import math
+ import operator
+ import regex
+-import tkrzw
+ import tkrzw_dict
++import tkrzw_dict_agent.core.pytkrzw as tkrzw
+ 
+ 
+ class UnionSearcher:
