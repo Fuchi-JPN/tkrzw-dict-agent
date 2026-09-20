@@ -254,6 +254,24 @@ individual sources.
 
 ## 日本語
 
+[tkrzw-dict](https://github.com/estraier/tkrzw-dict) 統合辞書を基盤とした、
+**AI エージェント向けの読み取り専用 英和語彙サイドカー**です。
+
+英文中の難しい語について、**順位付けした語義候補**（分野タグとスコア付き）を、
+発音・関連語・重要語抽出とあわせて提示します。呼び出し側が選ぶための根拠を
+提供するものであり、翻訳サービスではありません。
+
+**Pure Python** で実装しています。Tkrzw の `HashDBM` ファイルを直接読むため、
+Tkrzw C++ ライブラリもその Python 拡張も不要です。
+
+```console
+$ dict lookup tightening --context "The Fed tightened monetary policy"
+tightening  ˈtaɪtənɪŋ
+- 締めつけ（経済） 0.5071
+- 締付（経済） 0.4767
+- 引き締め（経済） 0.4481
+```
+
 ### 上流リポジトリとの関係（estraier/tkrzw-dict）
 
 本プロジェクトは
