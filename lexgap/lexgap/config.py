@@ -93,9 +93,12 @@ def load_models():
 def load_spec(name="s1"):
   """Loads a sampling spec such as ``specs/s1.toml``.
 
-  :param name: Spec name with or without the ``.toml`` suffix.
+  :param name: Spec name with or without the ``.toml`` suffix.  Matching is
+      case-insensitive because the set id is written upper-case (``S1``) while
+      the file is lower-case (``s1.toml``).
   """
-  filename = name if name.endswith(".toml") else "{}.toml".format(name)
+  stem = name[:-5] if name.endswith(".toml") else name
+  filename = "{}.toml".format(stem.lower())
   return load_toml(SPECS_DIR / filename)
 
 
