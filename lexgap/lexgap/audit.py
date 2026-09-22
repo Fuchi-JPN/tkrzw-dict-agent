@@ -122,8 +122,24 @@ def run_audit(conn, runner, log=None, limit=None, model_id=None):
               auditor_model),
       })
 
-  replies = asyncio.run(_ask_all(runner, payloads))
-  for payload, reply in zip(payloads, replies):
+  store = _make_store(conn, counts, len(payloads), log=log)
+  asyncio.run(_ask_all(runner, payloads, on_result=store))
+  if log:
+    log.info("audited %d task(s): %s", len(payloads), counts)
+  return counts
+
+
+def _make_store(conn, counts, total, log=None):
+  """Builds the per-reply callback that records one audit verdict.
+
+  Results are stored as they arrive rather than after every call has returned:
+  an audit batch is hundreds of model calls and can take tens of minutes, and a
+  crash must not discard completed work.  Each write is its own transaction, so
+  a re-run only redoes the tasks still marked pending.
+  """
+  state = {"done": 0}
+
+  def store(payload, reply):
     verdict = parse_verdict(reply)
     counts[verdict] += 1
     result = json.dumps({"verdict": verdict, "reply": (reply or "")[:200]},
@@ -132,13 +148,19 @@ def run_audit(conn, runner, log=None, limit=None, model_id=None):
       conn.execute(
           "UPDATE audit_tasks SET status = 'done', result = ? WHERE id = ?",
           (result, payload["task_id"]))
-  if log:
-    log.info("audited %d task(s): %s", len(payloads), counts)
-  return counts
+    state["done"] += 1
+    if log and state["done"] % 20 == 0:
+      log.info("  audited %d/%d", state["done"], total)
+
+  return store
 
 
-async def _ask_all(runner, payloads):
-  """Sends the audit prompts concurrently under the runner's semaphore."""
+async def _ask_all(runner, payloads, on_result=None):
+  """Sends the audit prompts concurrently under the runner's semaphore.
+
+  When ``on_result`` is given it is called with ``(payload, reply)`` as each
+  reply arrives, so the caller can persist incrementally.
+  """
   import asyncio
   import httpx
 
@@ -160,15 +182,22 @@ async def _ask_all(runner, payloads):
         response = await client.post(
             runner._base_url + "/chat/completions", json=body)  # noqa: SLF001
         if response.status_code != 200:
-          return None
+          return payload, None
         choice = (response.json().get("choices") or [{}])[0]
-        return (choice.get("message") or {}).get("content")
+        return payload, (choice.get("message") or {}).get("content")
       except Exception:  # noqa: BLE001 - a failed audit is recorded as unknown
-        return None
+        return payload, None
 
+  replies = []
   async with httpx.AsyncClient(timeout=runner._timeout) as client:  # noqa: SLF001
     tasks = [asyncio.create_task(one(client, payload)) for payload in payloads]
-    return await asyncio.gather(*tasks)
+    for future in asyncio.as_completed(tasks):
+      payload, reply = await future
+      if on_result is not None:
+        on_result(payload, reply)
+      else:
+        replies.append(reply)
+  return replies
 
 
 def summary(conn):
