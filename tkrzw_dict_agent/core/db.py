@@ -7,12 +7,36 @@ read-only.
 """
 
 import os
+import re
 
 from . import normalizer, upstream
 
-__all__ = ["Dictionary", "DictionaryError", "open_dictionary"]
+__all__ = [
+  "Dictionary",
+  "DictionaryError",
+  "open_dictionary",
+  "extract_sense_translations",
+  "SENSE_TRANSLATION_PATTERN",
+]
 
 DEFAULT_CAPACITY = 100
+
+# Sense translations live inside a sense's text as "[translation]: a, b, c" and
+# run until the next bracketed marker or the end of the string.
+SENSE_TRANSLATION_PATTERN = re.compile(
+    r"\[translation\]:\s*(.*?)(?=\[(?:-|synonym|antonym|hypernym|hyponym|"
+    r"derivative|synset|example|note|usage|etymology)|\Z)",
+    re.DOTALL)
+
+
+def extract_sense_translations(text):
+  """Returns the Japanese translations listed inside one sense's text."""
+  if not text:
+    return []
+  match = SENSE_TRANSLATION_PATTERN.search(text)
+  if not match:
+    return []
+  return [value.strip() for value in match.group(1).split(",") if value.strip()]
 
 
 class DictionaryError(RuntimeError):
@@ -146,6 +170,86 @@ class Dictionary:
     self._ensure_open()
     capacity = capacity if capacity is not None else self._capacity
     return self._searcher.SearchExactReverse(japanese, capacity) or []
+
+  def gloss_set(self, word, limit=None):
+    """Every Japanese translation recorded for a word, across its senses.
+
+    This is the entry's own translation list plus the ``[translation]:`` list of
+    each sense.  Measured on a 2,000-word sample the median entry carries only
+    four glosses, so this set is a subset of what is acceptable -- see
+    :meth:`expand_glosses` for a wider set.
+    """
+    self._ensure_open()
+    glosses = []
+    seen = set()
+    for entry in self.lookup(word):
+      values = list(entry.get("translation") or [])
+      for item in entry.get("item") or []:
+        values.extend(extract_sense_translations(
+            item.get("text") if isinstance(item, dict) else None))
+      for value in values:
+        if value and value not in seen:
+          seen.add(value)
+          glosses.append(value)
+    if limit is not None:
+      glosses = glosses[:limit]
+    return glosses
+
+  def synonyms(self, word, gloss_limit=8, per_gloss=4, limit=12):
+    """Headwords that share a translation with ``word``.
+
+    Synonyms are derived from the reverse index: a headword that the dictionary
+    also translates with one of ``word``'s glosses is treated as a synonym.  The
+    relation is symmetric and noisy -- polysemy links words that are not really
+    synonymous -- so the count is bounded on both axes.
+
+    :param gloss_limit: How many of the word's own glosses seed the search.
+    :param per_gloss: How many headwords to take per seed gloss.
+    :param limit: Maximum number of synonyms returned.
+    """
+    self._ensure_open()
+    found = []
+    seen = set()
+    for gloss in self.gloss_set(word, limit=gloss_limit):
+      for hit in self.search_reverse(gloss, per_gloss):
+        candidate = hit.get("word")
+        if candidate and candidate.lower() != word.lower() and candidate not in seen:
+          seen.add(candidate)
+          found.append(candidate)
+      if len(found) >= limit:
+        break
+    return found[:limit]
+
+  def expand_glosses(self, word, synonym_limit=12, per_synonym=40, extra_limit=200):
+    """Returns a synonym-linked gloss set for a word.
+
+    The entry's own glosses come first and are always included in full --
+    dropping any would break exact matching against the entry itself.  Then the
+    glosses of each synonym are appended, which is what lets an answer that is
+    correct but not listed under this particular headword still count: measured
+    against 200 audited answers, the expansion recovered 11 answers that the
+    plain gloss set rejected, at the cost of one false acceptance.
+
+    The relation is noisy -- polysemy links words that are not really synonyms
+    -- so every axis is bounded.  :paramref:`extra_limit` caps the number of
+    synonym-derived glosses added, not the size of the result.
+    """
+    self._ensure_open()
+    base = self.gloss_set(word)
+    expanded = list(base)
+    seen = set(base)
+    added = 0
+    if added >= extra_limit:
+      return expanded
+    for synonym in self.synonyms(word, limit=synonym_limit):
+      for gloss in self.gloss_set(synonym, limit=per_synonym):
+        if gloss and gloss not in seen:
+          seen.add(gloss)
+          expanded.append(gloss)
+          added += 1
+          if added >= extra_limit:
+            return expanded
+    return expanded
 
   def annotate(self, text):
     """Annotates an English text with dictionary hits.

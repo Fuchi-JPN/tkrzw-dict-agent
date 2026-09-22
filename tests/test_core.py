@@ -221,3 +221,45 @@ class TestSidecarFacade(unittest.TestCase):
           "tightening",
           [t["word"] for t in sidecar.enrich("Fed tightening policy.")["terms"]])
       self.assertTrue(sidecar.extract_terms("The central bank tightened policy."))
+
+
+class TestGlossExpansion(DictionaryTestCase):
+  """Synonym-linked gloss expansion (used by LexGap's judge)."""
+
+  def test_gloss_set_covers_entry_and_senses(self):
+    glosses = self.dictionary.gloss_set("tightening")
+    self.assertTrue(glosses)
+    self.assertTrue(all(isinstance(g, str) for g in glosses))
+
+  def test_gloss_set_respects_limit(self):
+    self.assertLessEqual(len(self.dictionary.gloss_set("bank", limit=3)), 3)
+
+  def test_synonyms_are_headwords(self):
+    synonyms = self.dictionary.synonyms("rogue")
+    self.assertTrue(synonyms)
+    self.assertNotIn("rogue", [s.lower() for s in synonyms])
+
+  def test_synonyms_respect_limit(self):
+    self.assertLessEqual(len(self.dictionary.synonyms("bank", limit=4)), 4)
+
+  def test_expand_glosses_is_a_superset(self):
+    base = set(self.dictionary.gloss_set("bank"))
+    expanded = set(self.dictionary.expand_glosses("bank"))
+    self.assertTrue(base.issubset(expanded))
+    self.assertGreater(len(expanded), len(base))
+
+  def test_expand_glosses_respects_extra_limit(self):
+    # extra_limit bounds the synonym-derived additions, not the base glosses.
+    base = len(self.dictionary.gloss_set("bank"))
+    expanded = self.dictionary.expand_glosses("bank", extra_limit=10)
+    self.assertLessEqual(len(expanded), base + 10)
+    self.assertGreaterEqual(len(expanded), base)
+
+  def test_extract_sense_translations(self):
+    from tkrzw_dict_agent.core import db as db_module
+
+    text = "a sense [-] [translation]: 締め付け, 引き締め [-] [synonym]: tight"
+    self.assertEqual(
+        db_module.extract_sense_translations(text), ["締め付け", "引き締め"])
+    self.assertEqual(db_module.extract_sense_translations("no markers"), [])
+    self.assertEqual(db_module.extract_sense_translations(None), [])

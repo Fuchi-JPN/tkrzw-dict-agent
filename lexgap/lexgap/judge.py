@@ -25,7 +25,7 @@ from . import db as db_module, normalizer
 
 __all__ = ["JUDGE_VERSION", "classify", "judge_set", "queue_audit_tasks", "LABELS"]
 
-JUDGE_VERSION = "j1"
+JUDGE_VERSION = "j2"
 
 LABELS = ("K", "P", "X", "U")
 
@@ -37,11 +37,82 @@ MAX_ANSWER_CHARS = 24
 MIN_OVERLAP_RATIO = 0.5
 
 
-def classify(raw_output, glosses):
+class GlossResolver:
+  """Widens the accepted gloss set beyond the entry's own translations.
+
+  Measured on a 2,000-word sample, the median entry lists only four Japanese
+  translations, so many correct answers are rejected simply because the entry
+  does not happen to list them.  The resolver adds two escapes, both derived
+  from the dictionary itself:
+
+  * **synonym glosses** -- the glosses of headwords that share a translation
+    with the target word (``Dictionary.expand_glosses``);
+  * **reverse link** -- the answer is a translation of one of those synonyms.
+
+  Validated against the 200 audited answers: recall rose from 0.376 to 0.447
+  while precision stayed at 0.91, at the cost of one false acceptance
+  (``drumstick`` -> もも肉).  It is a real but modest gain -- the suggestion
+  that the 43.3% "present somewhere in the dictionary" figure was recoverable
+  turned out to be an overestimate, because existing somewhere is not the same
+  as being a translation of a synonym of the target.
+  """
+
+  def __init__(self, dictionary, synonym_limit=12, per_synonym=40, extra_limit=200):
+    self._dictionary = dictionary
+    self._synonym_limit = synonym_limit
+    self._per_synonym = per_synonym
+    self._extra_limit = extra_limit
+    self._expanded = {}
+    self._synonyms = {}
+
+  def expand(self, word):
+    """Normalised synonym-linked gloss set for a word (cached)."""
+    if word not in self._expanded:
+      raw = self._dictionary.expand_glosses(
+          word, synonym_limit=self._synonym_limit,
+          per_synonym=self._per_synonym, extra_limit=self._extra_limit)
+      self._expanded[word] = {normalizer.normalize(g) for g in raw if g}
+      self._synonyms[word] = {
+          s.lower() for s in self._dictionary.synonyms(
+              word, limit=self._synonym_limit)}
+    return self._expanded[word]
+
+  def synonyms(self, word):
+    if word not in self._synonyms:
+      self.expand(word)
+    return self._synonyms[word]
+
+  def match(self, word, answer):
+    """Returns the rule name when the answer is acceptable for the word.
+
+    Tried only after the plain rules fail, so it can never take a verdict away
+    from them.  The answer is also tried in its morphological variants.
+    """
+    variants = normalizer.japanese_variants(answer)
+    expanded = self.expand(word)
+    for variant in variants:
+      if variant in expanded:
+        return "synonym_gloss"
+    synonyms = self.synonyms(word)
+    if synonyms:
+      for variant in variants:
+        hits = self._dictionary.search_reverse(variant, 4)
+        for hit in hits:
+          if (hit.get("word") or "").lower() in synonyms:
+            return "synonym_reverse"
+    return None
+
+
+def classify(raw_output, glosses, headword=None, resolver=None):
   """Classifies one answer against a gloss set.
 
   :param raw_output: The model's answer, or None on a failed probe.
   :param glosses: Iterable of accepted Japanese translations.
+  :param headword: The target word; required for the resolver.
+  :param resolver: Optional :class:`GlossResolver`.  When given, an answer that
+      the plain rules reject is retried against synonym-linked glosses and
+      morphological variants, and a match is reported as ``P`` with the rule
+      naming the path that matched.
   :returns: ``(label, rule, matched)``.
   """
   if raw_output is None:
@@ -70,16 +141,30 @@ def classify(raw_output, glosses):
       if len(shorter) / len(longer) >= MIN_OVERLAP_RATIO:
         return "P", "substring", original
 
-  # No string overlap.  A plausible Japanese word may still be a valid
-  # translation the dictionary lacks, which is exactly what the audit decides.
-  if normalizer.has_japanese(answer):
-    return "X", "unmatched_japanese", None
-  return "U", "unmatched_non_japanese", None
+  # A non-Japanese answer is a wrong answer whatever the dictionary says, so
+  # the resolver is only consulted for Japanese output.
+  if not normalizer.has_japanese(answer):
+    return "U", "unmatched_non_japanese", None
+
+  # No string overlap.  A synonym-linked gloss or a morphological variant may
+  # still match; that is a valid answer reached indirectly, so it is a P.
+  if resolver is not None and headword:
+    rule = resolver.match(headword, answer)
+    if rule:
+      return "P", rule, answer
+
+  # Still nothing.  A plausible Japanese word may be a valid translation the
+  # dictionary lacks, which is exactly what the audit decides.
+  return "X", "unmatched_japanese", None
 
 
-def judge_set(conn, set_id, model_id, task=None, log=None, limit=None):
+def judge_set(conn, set_id, model_id, task=None, log=None, limit=None,
+              use_resolver=True):
   """Judges every unjudged probe of a sample set and stores the verdicts.
 
+  :param use_resolver: Whether to widen the accepted gloss set with synonym
+      links and morphological variants (judge version ``j2``).  Setting it to
+      False reproduces the plain string matching of ``j1``.
   :returns: A counter of labels plus the number of probes considered.
   """
   sql = ("SELECT p.id, p.headword, p.raw_output FROM probes p "
@@ -96,29 +181,47 @@ def judge_set(conn, set_id, model_id, task=None, log=None, limit=None):
   from .dict_adapter import DictAdapter
 
   counts = {label: 0 for label in LABELS}
+  rules = {}
   judged = 0
+  resolver = None
+  parent = None
   with DictAdapter() as adapter:
-    for row in rows:
-      existing = conn.execute(
-          "SELECT id FROM judgments WHERE probe_id = ? AND judge_ver = ?",
-          (row["id"], JUDGE_VERSION)).fetchone()
-      if existing:
-        continue
-      glosses = adapter.gloss_set(row["headword"])
-      label, rule, matched = classify(row["raw_output"], glosses)
-      with db_module.transaction(conn):
-        conn.execute(
-            "INSERT INTO judgments (probe_id, label, rule, matched, "
-            "normalizer_ver, judge_ver, created_at) VALUES (?,?,?,?,?,?,?)",
-            (row["id"], label, rule, matched, normalizer.NORMALIZER_VERSION,
-             JUDGE_VERSION, db_module.utcnow()))
-      counts[label] += 1
-      judged += 1
-      if log and judged % 200 == 0:
-        log.info("  judged %d", judged)
+    if use_resolver:
+      from tkrzw_dict_agent.core import db as parent_db
+
+      # The resolver needs the full Dictionary (reverse index included), which
+      # the LexGap adapter does not expose.
+      parent = parent_db.open_dictionary(adapter.prefix)
+      resolver = GlossResolver(parent)
+    try:
+      for row in rows:
+        existing = conn.execute(
+            "SELECT id FROM judgments WHERE probe_id = ? AND judge_ver = ?",
+            (row["id"], JUDGE_VERSION)).fetchone()
+        if existing:
+          continue
+        glosses = adapter.gloss_set(row["headword"])
+        label, rule, matched = classify(
+            row["raw_output"], glosses, headword=row["headword"],
+            resolver=resolver)
+        with db_module.transaction(conn):
+          conn.execute(
+              "INSERT INTO judgments (probe_id, label, rule, matched, "
+              "normalizer_ver, judge_ver, created_at) VALUES (?,?,?,?,?,?,?)",
+              (row["id"], label, rule, matched, normalizer.NORMALIZER_VERSION,
+               JUDGE_VERSION, db_module.utcnow()))
+        counts[label] += 1
+        rules[rule] = rules.get(rule, 0) + 1
+        judged += 1
+        if log and judged % 200 == 0:
+          log.info("  judged %d", judged)
+    finally:
+      if parent is not None:
+        parent.close()
 
   summary = dict(counts)
   summary["judged"] = judged
+  summary["rules"] = rules
   return summary
 
 

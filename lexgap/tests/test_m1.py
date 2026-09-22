@@ -256,3 +256,122 @@ class TestAuditSummary(unittest.TestCase):
 
 if __name__ == "__main__":
   unittest.main()
+
+
+class TestJapaneseVariants(unittest.TestCase):
+  """Morphological variants used by the judge's resolver."""
+
+  def test_strips_inflection(self):
+    from lexgap import normalizer
+
+    self.assertIn("暴走", normalizer.japanese_variants("暴走した"))
+    self.assertIn("普及", normalizer.japanese_variants("普及させた"))
+
+  def test_strips_adjectival_suffix(self):
+    from lexgap import normalizer
+
+    self.assertIn("断片的", normalizer.japanese_variants("断片的な"))
+    self.assertIn("慢性", normalizer.japanese_variants("慢性的な"))
+
+  def test_keeps_the_original(self):
+    from lexgap import normalizer
+
+    self.assertIn("議会", normalizer.japanese_variants("議会"))
+
+  def test_is_bounded(self):
+    from lexgap import normalizer
+
+    variants = normalizer.japanese_variants("あ" * 40)
+    self.assertLess(len(variants), 200)
+
+  def test_empty_input(self):
+    from lexgap import normalizer
+
+    self.assertEqual(normalizer.japanese_variants(""), set())
+
+
+class TestClassifyWithResolver(unittest.TestCase):
+  """The resolver is additive: it can only turn a rejection into an accept."""
+
+  class _FakeResolver:
+    def __init__(self, rule):
+      self._rule = rule
+
+    def match(self, word, answer):
+      return self._rule
+
+  def test_no_resolver_keeps_the_old_behaviour(self):
+    label, rule, _ = judge.classify("全く別語", {"議会"})
+    self.assertEqual((label, rule), ("X", "unmatched_japanese"))
+
+  def test_resolver_converts_x_to_p(self):
+    label, rule, _ = judge.classify(
+        "全く別語", {"議会"}, headword="test", resolver=self._FakeResolver("synonym_gloss"))
+    self.assertEqual((label, rule), ("P", "synonym_gloss"))
+
+  def test_resolver_does_not_override_exact_match(self):
+    label, rule, _ = judge.classify(
+        "議会", {"議会"}, headword="test", resolver=self._FakeResolver("synonym_gloss"))
+    self.assertEqual((label, rule), ("K", "exact"))
+
+  def test_resolver_does_not_override_u(self):
+    label, rule, _ = judge.classify(
+        "parliament", {"議会"}, headword="test", resolver=self._FakeResolver("synonym_gloss"))
+    self.assertEqual((label, rule), ("U", "unmatched_non_japanese"))
+
+  def test_resolver_without_headword_is_ignored(self):
+    label, _, _ = judge.classify("全く別語", {"議会"}, resolver=self._FakeResolver("x"))
+    self.assertEqual(label, "X")
+
+  def test_null_resolver_match_keeps_x(self):
+    label, _, _ = judge.classify(
+        "全く別語", {"議会"}, headword="test", resolver=self._FakeResolver(None))
+    self.assertEqual(label, "X")
+
+
+@unittest.skipUnless(_HAS_DATA, "dictionary data not present")
+class TestGlossResolver(unittest.TestCase):
+  """Resolver behaviour against the real dictionary."""
+
+  @classmethod
+  def setUpClass(cls):
+    from tkrzw_dict_agent.core import db as parent_db
+
+    cls.parent = parent_db.open_dictionary()
+    cls.resolver = judge.GlossResolver(cls.parent)
+
+  @classmethod
+  def tearDownClass(cls):
+    cls.parent.close()
+
+  def test_expand_is_a_superset_of_gloss_set(self):
+    from lexgap import normalizer as jnorm
+
+    with DictAdapter() as adapter:
+      base = {jnorm.normalize(g) for g in adapter.gloss_set("bank") if g}
+    expanded = self.resolver.expand("bank")
+    self.assertTrue(base.issubset(expanded))
+    self.assertGreater(len(expanded), len(base))
+
+  def test_synonyms_are_exposed(self):
+    self.assertTrue(self.resolver.synonyms("rogue"))
+
+  def test_match_rejects_an_unrelated_answer(self):
+    self.assertIsNone(self.resolver.match("bank", "全く無関係な語"))
+
+  def test_match_finds_a_synonym_gloss(self):
+    # 断片的 is a gloss of the synonyms of "disconnected" but not of the entry.
+    with DictAdapter() as adapter:
+      base = {jnorm_normalize(g) for g in adapter.gloss_set("disconnected") if g}
+    self.assertNotIn("断片的", base)
+    rule = self.resolver.match("disconnected", "断片的な")
+    self.assertIsNotNone(rule)
+
+  def test_judge_version_is_bumped(self):
+    self.assertEqual(judge.JUDGE_VERSION, "j2")
+
+
+def jnorm_normalize(value):
+  from lexgap import normalizer as jnorm
+
+  return jnorm.normalize(value)
