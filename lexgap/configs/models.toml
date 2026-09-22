@@ -1,0 +1,39 @@
+# Model registry.
+#
+# Every model that takes part in a probe run is registered here so the results
+# stay interpretable: the same family at different quantization levels is the
+# axis of hypothesis H4.  `sha256` is recorded when the file is available so a
+# re-download that silently changes weights is detectable.
+#
+# Table names are quoted because model ids contain dots and hyphens; an
+# unquoted `[models.qwen2.5-32b]` would be parsed as nested tables.
+#
+# Q-03 (which model) is resolved when M1 starts; the entries below are
+# placeholders that document the intended shape, not confirmed choices.
+
+[models."qwen2.5-32b-instruct-q4"]
+family = "qwen2.5"
+quant  = "Q4_K_M"
+role   = "primary"
+# path   = "/home/masaru/models/..."
+# sha256 = "..."
+# n_ctx  = 32768
+note   = "Primary 30B-class candidate for M1. Must be a generation model, not an embedding model."
+
+[models."qwen2.5-32b-instruct-q8"]
+family = "qwen2.5"
+quant  = "Q8_0"
+role   = "quantization-sibling"
+note   = "Same family as the primary, for the H4 quantization comparison."
+
+[models."qwen2.5-32b-instruct-bf16"]
+family = "qwen2.5"
+quant  = "BF16"
+role   = "quantization-sibling"
+note   = "Reference quality for H4."
+
+[models."ja-degraded-substitute"]
+family = "TODO"
+quant  = "TODO"
+role   = "degraded"
+note   = "Q-04: a pruned or Japanese-weak public model standing in for a degraded model. H3 may be reported as undecidable (AC5 allows it)."

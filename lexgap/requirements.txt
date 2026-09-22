@@ -1,0 +1,13 @@
+regex>=2024.0
+httpx>=0.27
+numpy>=2.0
+scikit-learn>=1.5
+
+# tkrzw-dict-agent is consumed as a sibling checkout, not from PyPI:
+#   pip install -e ..
+# It provides the pure-Python Tkrzw HashDBM reader used by dict_adapter.py,
+# so the Tkrzw C++ binding is deliberately not a dependency.
+
+# Optional, only if Q-08 requires a local tokenizer.
+# sentencepiece>=0.2
+# transformers>=4.45

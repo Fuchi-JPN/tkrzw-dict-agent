@@ -1,0 +1,39 @@
+# LLM runner connection settings for LexGap probes.
+#
+# Verified during M0 (2026-09-21) against a local llama.cpp server:
+#   * OpenAI-compatible /v1/chat/completions responds
+#   * logprobs are supported (choices[].logprobs.content[].logprob)
+#   * the server was serving an *embedding* model at the time of the check, so
+#     the `model` field below must be repointed at a generation model before
+#     probing (see models.toml and Q-03).
+
+[runner.local]
+backend       = "llama.cpp"
+base_url      = "http://127.0.0.1:8080/v1"
+api_key       = ""                     # local server needs none
+# Requests are serialised per runner up to this many concurrent calls.
+# Two is the plan's initial value for a local runner: it keeps VRAM pressure
+# predictable and matches the 7-17h estimate for the full probe set.
+max_concurrency = 2
+request_timeout_s = 300
+max_retries   = 3
+retry_backoff_s = 2.0
+
+# Capabilities recorded from the M0 connectivity check.
+[runner.local.capabilities]
+supports_logprobs = true
+supports_seed     = true
+streaming         = false
+
+# Observed server limits.  n_ctx is the *currently loaded* context, not the
+# model's training context.
+[runner.local.limits]
+n_ctx       = 2048
+n_ctx_train = 40960
+
+# The model that must be loaded for probing.  `model` is echoed from
+# models.toml; keeping it here as well documents which server serves which
+# experiment.
+[runner.local.default_model]
+model_id = "qwen2.5-32b-instruct-q4"
+name     = "TODO: set the served model identifier"

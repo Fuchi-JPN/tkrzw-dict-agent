@@ -16,6 +16,19 @@ env/
 *.swp
 
 # ---------------------------------------------------------------
+# LexGap (subproject) runtime state
+#
+# The SQLite database, downloaded corpora and run logs are per-machine
+# experiment state, not source.  The schema is recreated by `lexgap init-db`
+# and the sampling spec is versioned in specs/.
+# ---------------------------------------------------------------
+lexgap/data/
+lexgap/logs/
+lexgap/*.db
+lexgap/*.db-wal
+lexgap/*.db-shm
+
+# ---------------------------------------------------------------
 # Vendored upstream checkout and dictionary data.
 #
 # tkrzw-dict/ is a clone of https://github.com/estraier/tkrzw-dict.git

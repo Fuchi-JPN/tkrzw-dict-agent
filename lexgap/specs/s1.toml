@@ -1,0 +1,45 @@
+# Sampling spec S1 -- the primary frequency-stratified sample.
+#
+# This file is versioned; changing it changes the sample, so a new set id must
+# be used rather than editing S1 in place.  Its full contents are frozen into
+# sample_sets.spec_json at generation time so a run can be reproduced even if
+# this file is later edited.
+
+[set]
+id     = "S1"
+seed   = 42
+spec_ver = "s1.toml@v1"
+note   = "Main 2,000-word frequency-stratified sample plus auxiliary layers."
+
+[source]
+# Q-01 resolution: `probability` is present on every entry but left-censored at
+# 1e-07 -- 38% of entries store 0, and those are exactly the bottom 30% by
+# frequency rank.  Stratifying on log(probability) would put 38% of the
+# dictionary in the last quantile and break per-quantile balance, so the
+# quantiles are cut on the frequency rank of union-keys.txt instead, which is
+# complete and ordered.  log_freq remains a predictor feature.
+stratify_by        = "freq_rank"
+dictionary_prefix  = "../tkrzw-dict/union"
+
+[main]
+n_quantiles         = 20
+per_quantile        = 100
+# Only plain English headwords; the probe target is an English word in an
+# English sentence.
+filter_regex        = "^[A-Za-z][A-Za-z-]*$"
+# Probes need ground truth, so entries without a Japanese translation are
+# excluded (14.2% of entries have none and cannot be recovered from senses).
+require_translation = true
+# Sampling without replacement within a quantile, from the set seed.
+with_replacement    = false
+
+[aux]
+# Auxiliary layers probe hypotheses that the frequency curve cannot see.
+# Overlap with the main layer is allowed and flagged with is_duplicate.
+multi_sense_min = 5
+multi_sense_n   = 200
+domain_n        = 200
+
+[probe]
+# Which tasks to run for this set (plan section 4.4).
+tasks = ["P1", "P2"]
