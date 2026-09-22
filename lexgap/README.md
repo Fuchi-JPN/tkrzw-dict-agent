@@ -10,8 +10,8 @@ It is a subproject of the [`tkrzw-dict-agent`](../) repository and uses that
 project's union dictionary as its source of ground truth. It is a research
 harness, not a service.
 
-> **Status: M0 complete.** The environment is verified and the two open
-> questions that block the sampler have been resolved by measurement (see
+> **Status: M0 complete.** The environment check passes all 12 items, and the
+> questions that block the sampler are resolved by measurement (see
 > [M0 findings](#m0-findings)). M1 (sampling and the first probe run) is next.
 
 ## Pipeline
@@ -144,12 +144,38 @@ excluded as targets.
 Domain derivation dominates the full scan. It is a one-time cost per sampling
 run, not a per-probe cost.
 
-### Runner
+### Runner (Q-03 resolved)
 
-A local llama.cpp server answers on `http://127.0.0.1:8080/v1` and supports
-`logprobs`. At M0 it was serving `Qwen3-Embedding-8B`, an **embedding** model:
-`envcheck` reports this as a failure, because probes need a generation model
-(Q-03). The runner is otherwise ready.
+The primary model is served over Tailscale at `http://100.70.13.83:1234/v1`
+by an MLX server (8 models, 1M context on the primary). Three measured
+properties shape the probe design:
+
+| property | result | consequence |
+|---|---|---|
+| generation | works | usable for probes |
+| `seed` | honoured | re-runs reproduce (verified twice) |
+| `logprobs` | **not supported** | `avg_logprob` unavailable; `self_consistency` replaces it |
+| reasoning separation | **none** | thinking lands in `message.content` |
+
+The reasoning point is the important one. By default the model writes its
+thinking into `content`:
+
+```
+default:  'The user is asking for a one-word Japanese translation of
+           "Tightening."  Let me think about the context. ...'   (200 tokens)
+chat_template_kwargs={"enable_thinking": false}:  '締め付け'      (2 tokens)
+```
+
+Judging compares `content` against a gloss set, so **every probe must send
+`chat_template_kwargs = {"enable_thinking": false}`**. `envcheck` verifies that
+this yields a clean answer, and the token saving is a bonus.
+
+The server is also **single-model**: the Metal wired-memory ceiling is 51.84 GB
+and the primary occupies 33.03 GB, so any sibling model fails to load until it
+is unloaded (projected 55-74 GB). M3 and M4 must therefore switch models
+serially. For H4 the server offers no BF16/Q8/Q4 triple of one checkpoint; the
+clean axis is pruning ratio (`REAP-288` vs `REAP-384`), while bit-width
+comparisons mix fine-tunes and must be reported as confounded.
 
 ## Testing
 

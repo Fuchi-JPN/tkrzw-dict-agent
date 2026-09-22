@@ -223,46 +223,93 @@ def collect_envcheck(log, db_path):
 
 
 def _check_runner(log):
-  """Checks the configured runner for reachability and logprobs support."""
-  try:
-    import httpx
+  """Checks the configured runner for the capabilities the probes need.
 
+  What matters is not "is it reachable" but "can a probe get a clean, short,
+  reproducible Japanese answer".  Three measured properties decide that:
+
+  * the served model is a generation model, not an embedding model;
+  * thinking can be disabled, otherwise the model's reasoning lands in
+    ``message.content`` and the judge would be comparing prose to a gloss;
+  * a fixed seed is honoured, so a re-run reproduces.
+
+  ``logprobs`` is recorded but not required: the primary runner does not
+  support it, which only disables the optional average-logprob feature.
+  """
+  try:
     runners = config.load_runners()
-    runner = runners["runner"]["local"]
+    name = "primary" if "primary" in runners.get("runner", {}) else "local"
+    runner = runners["runner"][name]
     base_url = runner["base_url"]
+    model = runner.get("default_model", {}).get("name") or runner.get("model_id")
+    capabilities = runner.get("capabilities", {})
   except Exception as exc:  # noqa: BLE001
     return [{"name": "runner configured", "ok": False, "detail": repr(exc)}]
 
   results = []
+  payload_extra = {}
+  if capabilities.get("supports_disable_thinking"):
+    payload_extra["chat_template_kwargs"] = capabilities.get(
+        "disable_thinking_kwargs", {"enable_thinking": False})
+
+  def call(client, content, max_tokens=24, seed=None):
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "temperature": 0,
+        "max_tokens": max_tokens,
+    }
+    body.update(payload_extra)
+    if seed is not None:
+      body["seed"] = seed
+    return client.post(base_url + "/chat/completions", json=body)
+
   try:
-    with httpx.Client(timeout=15.0) as client:
-      response = client.get(base_url + "/models")
-      response.raise_for_status()
-      payload = response.json()
-      models = [item.get("id") for item in payload.get("data", [])]
+    import httpx
+
+    with httpx.Client(timeout=120.0) as client:
+      listing = client.get(base_url + "/models")
+      listing.raise_for_status()
+      data = listing.json().get("data", [])
+      ids = {item.get("id") for item in data}
       results.append({"name": "runner reachable", "ok": True,
-                      "detail": "{}, {} model(s)".format(base_url, len(models))})
-      loaded = models[0] if models else ""
-      looks_like_embedding = "embedding" in loaded.lower()
+                      "detail": "{}, {} model(s)".format(base_url, len(ids))})
+      results.append({"name": "configured model is served", "ok": model in ids,
+                      "detail": model if model in ids else
+                                "{} not in /v1/models".format(model)})
+
+      reply = call(client, "Reply with exactly: OK")
+      ok = reply.status_code == 200
+      text = ""
+      if ok:
+        choice = (reply.json().get("choices") or [{}])[0]
+        text = (choice.get("message") or {}).get("content") or ""
+      looks_like_reasoning = "the user" in text.lower() and len(text) > 200
       results.append({
-          "name": "runner serves a generation model",
-          "ok": not looks_like_embedding,
-          "detail": ("{} (looks like an embedding model; load a generation model "
-                     "before probing)").format(loaded) if looks_like_embedding
-                    else loaded,
+          "name": "serves a generation model with thinking disabled",
+          "ok": ok and bool(text) and not looks_like_reasoning,
+          "detail": ("{}... (reasoning leaked into content; set "
+                     "chat_template_kwargs.enable_thinking=false)").format(text[:60])
+                    if looks_like_reasoning else text[:60].replace("\n", " "),
       })
-      probe = client.post(
-          base_url + "/chat/completions",
-          json={"model": "local",
-                "messages": [{"role": "user", "content": "ping"}],
-                "temperature": 0, "max_tokens": 1,
-                "logprobs": True, "top_logprobs": 2})
-      supports = False
-      if probe.status_code == 200:
-        choice = (probe.json().get("choices") or [{}])[0]
-        supports = bool(choice.get("logprobs"))
-      results.append({"name": "runner supports logprobs", "ok": supports,
-                      "detail": "HTTP {}".format(probe.status_code)})
+
+      if capabilities.get("supports_seed"):
+        first = call(client, "Count from 1 to 5.", max_tokens=32, seed=42)
+        second = call(client, "Count from 1 to 5.", max_tokens=32, seed=42)
+        same = (first.status_code == 200 and second.status_code == 200
+                and first.json()["choices"][0]["message"]["content"]
+                == second.json()["choices"][0]["message"]["content"])
+        results.append({"name": "seed produces identical output", "ok": same,
+                        "detail": "seed=42 twice" if same else "outputs differed"})
+
+      logprobs = capabilities.get("supports_logprobs")
+      results.append({
+          "name": "logprobs available (optional)",
+          "ok": True,
+          "detail": "supported" if logprobs else
+                    "not supported on this runner; avg_logprob unavailable, "
+                    "self-consistency still available",
+      })
   except Exception as exc:  # noqa: BLE001
     results.append({"name": "runner reachable", "ok": False, "detail": repr(exc)})
   return results

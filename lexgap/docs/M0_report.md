@@ -2,11 +2,11 @@
 
 | 項目 | 内容 |
 |---|---|
-| 版 | v1.0 |
+| 版 | v1.1 |
 | 実施日 | 2026-09-22 |
 | 対象 | マイルストーン M0（環境確認） |
 | 計画書 | `docs/spec/LexGap（小型LLM日本語語彙欠落検証システム）実装計画書_20260921.md` |
-| 状態 | **完了**（M0-1〜M0-6、Q-01・Q-02 解消） |
+| 状態 | **完了**（M0-1〜M0-6、Q-01・Q-02・Q-03 解消、環境チェック全12項目合格） |
 
 本書は計画書 §5 M0 の成果物（計測メモ・調査メモ）をまとめたものである。数値はすべて実測であり、推定には実測値の算出根拠を併記した。
 
@@ -20,9 +20,9 @@
 | M0-2 DB疎通・走査時間 | 完了。全499,750キーを **12.1秒**（キー読取のみ）、レコード復号＋分野推定を含め **97秒** |
 | M0-3 頻度フィールド（Q-01） | **解消**。`probability` を採用。ただし `1e-07` で左打ち切り。層化は `freq_rank` を使用 |
 | M0-4 例文-語義対応（Q-02） | **解消**。例文はエントリ単位。語義単位の対応は**不可能** → 計画書のフォールバックを採用 |
-| M0-5 ランナー疎通 | 完了。llama.cpp が応答、**logprobs対応**。ただし現在ロード中は埋め込みモデル |
+| M0-5 ランナー疎通 | 完了。MLXサーバが応答、**seed再現・思考無効化に対応**。logprobsは非対応。Q-03確定 |
 | M0-6 スキーマ初期化 | 完了。10テーブル、schema v1、冪等、WAL有効 |
-| 環境チェック | `scripts/m0_envcheck.py` が10項目中9項目OK、1項目NG（生成モデル未ロード） |
+| 環境チェック | `scripts/m0_envcheck.py` が**全12項目OK**（終了コード0） |
 
 ---
 
@@ -144,23 +144,71 @@ P2 の正解肢生成（計画書 §4.4）も同様に、計画書が示した�
 
 ---
 
-## 7. M0-5 ランナー
+## 7. M0-5 ランナー（Q-03 解消）
+
+利用者指定のエンドポイントとモデルを実測で検証した。
 
 | 項目 | 実測 |
 |---|---|
-| バックエンド | llama.cpp（`Server: llama.cpp`） |
-| エンドポイント | `http://127.0.0.1:8080/v1` |
-| `/v1/models` | HTTP 200 |
-| `/v1/chat/completions` | HTTP 200 |
-| **`logprobs`** | **対応**（`choices[].logprobs.content[].logprob` を返す） |
-| `/props` | 取得可能 |
-| ロード中のモデル | `Qwen3-Embedding-8B-iq3_m.gguf` |
-| `n_ctx`（現在） | 2048 |
-| `n_ctx_train` | 40960 |
+| エンドポイント | `http://100.70.13.83:1234/v1`（Tailscale 経由） |
+| サーバ | uvicorn、`owned_by: omlx`（MLX推論サーバ） |
+| 提供モデル数 | 8 |
+| 指定モデル | `Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU-mlx-oQ8e-1M` |
+| コンテキスト長 | `max_model_len = 1,048,576`（1M） |
+| 生成 | 成功 |
+| **seed再現** | **対応**（seed=42 の2回実行が完全一致） |
+| `logprobs` | **非対応**（要求は受理されるが空オブジェクトを返す） |
+| **思考の分離** | **なし**（`message` は `role` と `content` のみ） |
 
-**問題**: 現在ロードされているのは**埋め込みモデル**であり、プローブ（P1/P2）および審判に使用できない。`envcheck` はこの状態を `NG` として検出する。
+### 7.1 最重要の発見: 思考が `content` に混入する
 
-**対応**: Q-03（モデル確定）として、M1開始前に30B級の**生成モデル**をロードする。ランナー側のAPI・logprobs対応は確認済みであり、モデル差し替えのみで probing 可能な状態にある。
+指定モデルは推論（reasoning）モデルであり、既定のテンプレートでは思考過程が `message.content` にそのまま出力される。
+
+```
+既定:            'The user is asking for a one-word Japanese translation of
+                  "Tightening."\n\nLet me think about the context. ...'
+                 → 200トークン消費、訳語は得られず
+enable_thinking=false: '締め付け'
+                 → 2トークン、訳語のみ
+```
+
+判定器は出力を語義集合と照合するため、思考が混入した出力は比較不能である。
+
+**対応**: 全プローブ要求で `chat_template_kwargs = {"enable_thinking": false}` を送る。`configs/runners.toml` の `disable_thinking_kwargs` に定義し、`envcheck` が「思考無効化で正常応答するか」を検証項目に含めている（合格済み）。トークン消費も約1/100になるため、コスト見積もりにも有利に働く。
+
+### 7.2 logprobs 非対応
+
+計画書 §4.4 の任意計測「平均対数確率」は本ランナーでは取得できない。`supports_logprobs = false` として記録した。
+
+- 影響: 特徴量 `avg_logprob`（計画書 §4.6）は使用不可
+- 代替: `--sc`（温度0.7×3回の自己整合性）は利用可能であり、不確実性の代理指標として `self_consistency` を使う
+
+`envcheck` は logprobs を**必須項目ではなく記録項目**として扱う（`ok=True` 固定・詳細に可否を明記）。
+
+### 7.3 単一モデル制約（M3影響）
+
+MLXサーバは**同時に1モデルしか保持できない**。Metal の wired メモリ上限が 51.84GB で、指定モデルが 33.03GB を占めるため、他モデルのロードは上限超過で失敗する。
+
+```
+Qwen3.8-27B-MLX-6bit      → projected 55.31GB > 51.84GB で失敗
+Qwen3.8-27B-Huihui-...    → projected 56.22GB > 51.84GB で失敗
+Qwen3.8-Flash-Next-REAP-288 → projected 73.61GB > 51.84GB で失敗
+```
+
+**影響**: M3（量子化・モデル間比較）と M4（介入評価）は、モデルを**直列に切り替えながら**実行する必要がある。並列実行は不可能。`configs/models.toml` の各エントリに `resident` / `loadable` を記録した。
+
+### 7.4 H4（量子化比較）の実施設計への影響
+
+同一チェックポイントの BF16/Q8/Q4 という三つ組は**サーバ上に存在しない**。実測に基づく代替軸は2つ:
+
+| 軸 | 対象 | 評価 |
+|---|---|---|
+| **枝刈り率** | `REAP-288` vs `REAP-384`（同一手法・同一ベース） | **推奨**。交絡が少ない |
+| ビット幅 | `oQ8e` vs `oQ6e` vs `oQ3e-DWQ` | ファインチューンが異なるため**交絡あり**。その旨を明記して報告 |
+
+### 7.5 Q-04（日本語劣化モデル）の候補
+
+枝刈りモデル `Qwen3.8-Flash-Next-REAP-288/384` が Q-04 の候補として利用可能である（計画書の「枝刈り or 日本語の弱い公開モデルで代替」に合致）。ただし §7.3 のとおり、使用時は指定モデルをアンロードする必要がある。
 
 ---
 
@@ -185,7 +233,7 @@ features, predictions, intervention_runs, meta
 
 | 計画書の検収項目 | 結果 |
 |---|---|
-| `scripts/m0_envcheck.py` が全項目OK | 9/10 OK（残り1は生成モデル未ロード。環境側の問題であり、モデル差し替えで解消） |
+| `scripts/m0_envcheck.py` が全項目OK | **全12項目OK（終了コード0）** |
 | 同一シードで抽出語集合が一致（AC4の一部） | **M1-2 で検証予定**（sampler 実装後） |
 | `init_db()` 実行済み | 完了 |
 | `specs/s1.toml` がコミット済み | 完了（`freq_rank` 層化・訳語必須を反映） |
@@ -196,13 +244,15 @@ features, predictions, intervention_runs, meta
 
 ## 10. M1 への引き継ぎ
 
-M1 の着手条件は満たしている。着手時に対応が必要な項目:
+M1 の着手条件は満たしている（ブロッカーなし）。M1 実装時の必須事項:
 
-1. **Q-03**: 生成モデルを確定し `configs/models.toml` と `configs/runners.toml` を更新する（`envcheck` の残NG項目）
-2. `sampler.py` は `freq_rank` で20分位、`require_translation = true` で抽出する
-3. `prompter.py` + `p1_v1.txt` を作成する
-4. `runner.py` は `probes` の UNIQUE 制約をキャッシュとして使い、並列度2・指数バックオフ3回で実装する
-5. `judge.py` は `dict_adapter.gloss_set()` と `normalizer.normalize()` を用い、K/P/U/X を付与する。規則3・4は区別せず監査キューへ送る（計画書 §4.5）
+1. **プローブ要求に `chat_template_kwargs = {"enable_thinking": false}` を必ず含める**（§7.1）。欠落すると思考が `content` に混入し判定不能になる
+2. `avg_logprob` 特徴量は使用不可。`self_consistency`（`--sc`）を不確実性指標として使う（§7.2）
+3. `sampler.py` は `freq_rank` で20分位、`require_translation = true` で抽出する（§4.4、§5.3）
+4. `prompter.py` + `p1_v1.txt` を作成する。1M コンテキストが使えるため、例文と文脈を十分に含められる
+5. `runner.py` は `probes` の UNIQUE 制約をキャッシュとして使い、並列度2・指数バックオフ3回で実装する。`seed` は固定値（42 等）を送る
+6. `judge.py` は `dict_adapter.gloss_set()` と `normalizer.normalize()` を用い、K/P/U/X を付与する。規則3・4は区別せず監査キューへ送る（計画書 §4.5）
+7. トークン消費は思考無効化により小さい（1語応答で2トークン実測）。計画書 §9.2 のコスト見積もりは M1-5 の実測で更新する
 
 ---
 

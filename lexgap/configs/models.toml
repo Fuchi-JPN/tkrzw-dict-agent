@@ -1,39 +1,120 @@
 # Model registry.
 #
-# Every model that takes part in a probe run is registered here so the results
-# stay interpretable: the same family at different quantization levels is the
-# axis of hypothesis H4.  `sha256` is recorded when the file is available so a
-# re-download that silently changes weights is detectable.
+# All models are served by the same single-model MLX runner (see
+# runners.toml), which cannot hold two models at once.  Every entry therefore
+# records the memory cost and whether the model was confirmed loadable, so a
+# probe batch can be planned around serial model switching.
 #
-# Table names are quoted because model ids contain dots and hyphens; an
-# unquoted `[models.qwen2.5-32b]` would be parsed as nested tables.
+# Verified on 2026-09-22 against http://100.70.13.83:1234/v1.
+
+[meta]
+server          = "http://100.70.13.83:1234/v1"
+metal_cap_gb    = 51.84
+resident_gb     = 33.03
+# Only one model fits at a time; switching means unloading the current one.
+single_model    = true
+verified_on     = "2026-09-22"
+
+# ---------------------------------------------------------------------------
+# Primary model for M1 (resolves Q-03).
+# ---------------------------------------------------------------------------
+[models."qwen3.8-27b-turbo-oq8e-1m"]
+id        = "Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU-mlx-oQ8e-1M"
+family    = "Qwen3.8-27B"
+quant     = "oQ8e"
+ctx       = 1048576
+role      = "primary"
+resident  = true
+loadable  = true
+note      = "Q-03 answer. Reasoning model: probes must pass chat_template_kwargs={enable_thinking=false}. Answers a one-word prompt in 2 tokens with it, 200+ without."
+
+# ---------------------------------------------------------------------------
+# Quantization / pruning siblings for H4 (plan section 5, M3).
 #
-# Q-03 (which model) is resolved when M1 starts; the entries below are
-# placeholders that document the intended shape, not confirmed choices.
+# Measured obstacle: none of the siblings could be loaded while the primary is
+# resident -- each projected past the 51.84 GB Metal ceiling.  H4 therefore
+# needs serial model switching, and the axis is not a clean BF16/Q8/Q4 triple
+# of one checkpoint (see `h4_note`).
+# ---------------------------------------------------------------------------
+[models."qwen3.8-27b-mlx-6bit"]
+id       = "Qwen3.8-27B-MLX-6bit"
+family   = "Qwen3.8-27B"
+quant    = "6bit"
+ctx      = 262144
+role     = "quantization-sibling"
+resident = false
+loadable = false
+note     = "Loadable only after unloading the primary (projected 55.31GB)."
 
-[models."qwen2.5-32b-instruct-q4"]
-family = "qwen2.5"
-quant  = "Q4_K_M"
-role   = "primary"
-# path   = "/home/masaru/models/..."
-# sha256 = "..."
-# n_ctx  = 32768
-note   = "Primary 30B-class candidate for M1. Must be a generation model, not an embedding model."
+[models."qwen3.8-27b-huihui-abliterated-oq6e"]
+id       = "Qwen3.8-27B-Huihui-Abliterated-oQ6e-MTP-MLX"
+family   = "Qwen3.8-27B"
+quant    = "oQ6e"
+ctx      = 262144
+role     = "quantization-sibling"
+resident = false
+loadable = false
+note     = "Abliterated variant; projected 56.22GB, needs the primary unloaded."
 
-[models."qwen2.5-32b-instruct-q8"]
-family = "qwen2.5"
-quant  = "Q8_0"
-role   = "quantization-sibling"
-note   = "Same family as the primary, for the H4 quantization comparison."
+[models."qwen3.8-flash-next-reap-288-4bit"]
+id       = "Qwen3.8-Flash-Next-REAP-288-MLX-4bit"
+family   = "Qwen3.8-Flash-Next"
+quant    = "4bit"
+pruning  = "REAP-288"
+ctx      = 262144
+role     = "degraded-candidate"
+resident = false
+loadable = false
+note     = "Q-04 candidate: pruned model, a plausible stand-in for a degraded model. Projected 73.61GB."
 
-[models."qwen2.5-32b-instruct-bf16"]
-family = "qwen2.5"
-quant  = "BF16"
-role   = "quantization-sibling"
-note   = "Reference quality for H4."
+[models."qwen3.8-flash-next-reap-384-4bit"]
+id       = "Qwen3.8-Flash-Next-REAP-384-MLX-4bit"
+family   = "Qwen3.8-Flash-Next"
+quant    = "4bit"
+pruning  = "REAP-384"
+ctx      = 262144
+role     = "degraded-candidate"
+resident = false
+note     = "Pairs with REAP-288 as a controlled pruning axis (fewer experts retained)."
 
-[models."ja-degraded-substitute"]
-family = "TODO"
-quant  = "TODO"
-role   = "degraded"
-note   = "Q-04: a pruned or Japanese-weak public model standing in for a degraded model. H3 may be reported as undecidable (AC5 allows it)."
+[models."qwen3.8-flash-next-reap320-oq3e-dwq"]
+id       = "Qwen3.8-Flash-Next-REAP320-oQ3e-DWQ-MTP-Vision-MLX"
+family   = "Qwen3.8-Flash-Next"
+quant    = "oQ3e-DWQ"
+pruning  = "REAP-320"
+ctx      = 262144
+role     = "low-quantization"
+resident = false
+note     = "Lowest-bit sibling; useful as the aggressive end of the quantization axis."
+
+[models."thomson-1.0-small-8bit"]
+id       = "Thomson-1.0-Small-mlx-8Bit"
+family   = "Thomson-1.0"
+quant    = "8bit"
+ctx      = 262144
+role     = "other-family"
+resident = false
+note     = "Different family; a cross-family comparison point."
+
+[models."gemma-4-31b-it-heretic-4bit"]
+id       = "gemma-4-31B-it-uncensored-heretic-4bit"
+family   = "gemma-4"
+quant    = "4bit"
+ctx      = 14336
+role     = "other-family"
+resident = false
+note     = "Different family and a much smaller context; the short context limits probe prompt length."
+
+# ---------------------------------------------------------------------------
+# H4 design note
+# ---------------------------------------------------------------------------
+[h4_note]
+# H4 asks whether quantization level changes the vocabulary-gap curve.  The
+# server does not offer BF16/Q8/Q4 of one identical checkpoint.  The two viable
+# controlled axes are:
+#   1. pruning ratio  -- REAP-288 vs REAP-384 (same method, same base)
+#   2. bit width      -- oQ8e vs oQ6e vs oQ3e-DWQ across Qwen3.8 variants
+# (1) is the cleaner experiment; (2) confounds fine-tuning with quantization
+# and must be reported as such.
+axis_recommended = "pruning ratio (REAP-288 vs REAP-384)"
+axis_caveat      = "bit-width comparison mixes fine-tunes; report as confounded"

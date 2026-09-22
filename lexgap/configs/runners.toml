@@ -1,39 +1,71 @@
 # LLM runner connection settings for LexGap probes.
 #
-# Verified during M0 (2026-09-21) against a local llama.cpp server:
-#   * OpenAI-compatible /v1/chat/completions responds
-#   * logprobs are supported (choices[].logprobs.content[].logprob)
-#   * the server was serving an *embedding* model at the time of the check, so
-#     the `model` field below must be repointed at a generation model before
-#     probing (see models.toml and Q-03).
+# Verified on 2026-09-22 against the MLX server that serves the primary model.
+# Everything below is measured, not assumed.
 
+[runner.primary]
+backend  = "mlx-lm (OpenAI-compatible)"
+base_url = "http://100.70.13.83:1234/v1"
+api_key  = ""                       # the server needs none
+# The server is single-model: it loads on demand and cannot hold two models at
+# once (see `limits`).  Probes must therefore run one model at a time and the
+# model must be the resident one.
+model_id = "qwen3.8-27b-turbo-oq8e-1m"
+# Requests are serialised per runner up to this many concurrent calls.  The
+# runner is a single Metal device, so two is a ceiling, not a target.
+max_concurrency   = 2
+request_timeout_s = 600
+max_retries       = 3
+retry_backoff_s   = 2.0
+
+[runner.primary.capabilities]
+# MEASURED: `logprobs` is accepted but returns an empty object, so the plan's
+# optional avg_logprob feature is NOT available on this runner.  Self-
+# consistency (temperature 0.7 x 3) remains available via the --sc flag.
+supports_logprobs = false
+# MEASURED: identical output for two calls with the same seed.
+supports_seed = true
+# MEASURED: with the default template the model writes its reasoning into
+# `message.content`, which would break judgement.  Passing
+# `chat_template_kwargs = {"enable_thinking": false}` makes it answer directly
+# (2 tokens instead of 200).  Every probe request must set it.
+supports_disable_thinking = true
+disable_thinking_kwargs = { enable_thinking = false }
+separates_reasoning_field = false
+streaming = false
+
+[runner.primary.limits]
+# MEASURED: Metal wired-memory ceiling on the host, and the size of the
+# currently resident model.  A second model cannot be loaded until the first is
+# unloaded, so M3/M4 must switch models serially.
+metal_cap_gb = 51.84
+resident_gb  = 33.03
+max_model_len = 1048576
+
+[runner.primary.default_model]
+model_id = "qwen3.8-27b-turbo-oq8e-1m"
+name     = "Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU-mlx-oQ8e-1M"
+
+# ---------------------------------------------------------------------------
+# Legacy local runner, kept for reference.  It is a llama.cpp server that was
+# used during M0 and supports logprobs, unlike the primary runner above.
+# ---------------------------------------------------------------------------
 [runner.local]
-backend       = "llama.cpp"
-base_url      = "http://127.0.0.1:8080/v1"
-api_key       = ""                     # local server needs none
-# Requests are serialised per runner up to this many concurrent calls.
-# Two is the plan's initial value for a local runner: it keeps VRAM pressure
-# predictable and matches the 7-17h estimate for the full probe set.
-max_concurrency = 2
+backend  = "llama.cpp"
+base_url = "http://127.0.0.1:8080/v1"
+api_key  = ""
+max_concurrency   = 2
 request_timeout_s = 300
-max_retries   = 3
-retry_backoff_s = 2.0
+max_retries       = 3
+retry_backoff_s   = 2.0
+model_id = "local-generation-model"
+note     = "Local llama.cpp. Supports logprobs; was serving an embedding model at M0."
 
-# Capabilities recorded from the M0 connectivity check.
 [runner.local.capabilities]
 supports_logprobs = true
 supports_seed     = true
-streaming         = false
+supports_disable_thinking = false
 
-# Observed server limits.  n_ctx is the *currently loaded* context, not the
-# model's training context.
 [runner.local.limits]
 n_ctx       = 2048
 n_ctx_train = 40960
-
-# The model that must be loaded for probing.  `model` is echoed from
-# models.toml; keeping it here as well documents which server serves which
-# experiment.
-[runner.local.default_model]
-model_id = "qwen2.5-32b-instruct-q4"
-name     = "TODO: set the served model identifier"
